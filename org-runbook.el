@@ -723,6 +723,29 @@ Ensures the file exists unless NO-ENSURE is non-nil."
   (or (-some-> (get-text-property (point) 'section) org-runbook-goto-target-action)
       (user-error "No known section at point")))
 
+(defun org-runbook--fetch-params ()
+  (save-excursion
+    (unless (org-at-heading-p)
+      (outline-previous-heading))
+    (let ((param-str (cdr (assoc "ORG_RUNBOOK_PARAMS" (org-entry-properties) 'equal))))
+      (when param-str
+        (let ((args '())
+              (params (split-string param-str "[ \t]" t)))
+          (while params
+            (let* ((param (car params))
+                   (split-param (split-string param "=" t))
+                   (name (car split-param))
+                   (val (cadr split-param)))
+              (when (and name val)
+                (push (cons
+                       name
+                       (pcase val
+                         ("s" (read-from-minibuffer (format "input %s:" name)))))
+                      args))
+              (setq params (cdr params))))
+          (nreverse args)
+          args)))))
+
 (defun org-runbook--shell-command-for-target (target)
   "Return the `org-runbook-command' for a TARGET.
 TARGET is a `org-runbook-command-target'."
@@ -751,7 +774,8 @@ TARGET is a `org-runbook-command-target'."
                   (while (and (re-search-forward (rx "#+BEGIN_SRC" (* whitespace) (or "shell" "emacs-lisp" "compile-queue")) nil t)
                               (eq (save-excursion (outline-previous-heading) (point)) start))
                     (setq has-pty-tag (or has-pty-tag (-contains-p (org-runbook--get-tags) "PTY")))
-                    (let* ((src-block-info (org-babel-get-src-block-info nil (org-element-context))))
+                    (let* ((src-block-info (org-babel-get-src-block-info nil (org-element-context)))
+                           (extra-params (org-runbook--fetch-params)))
                       (pcase (car src-block-info)
                         ((pred (s-starts-with-p "emacs-lisp"))
                          (push
@@ -790,6 +814,8 @@ TARGET is a `org-runbook-command-target'."
                              (--doto (ht<-alist (->> (car (cdr (cdr src-block-info)))
                                                      (--map (cons (symbol-name (car it)) (format "%s" (cdr it))))
                                                      (--filter (not (s-starts-with-p ":" (car it))))))
+                               (dolist (elt extra-params)
+                                 (ht-set it (car elt) (cdr elt)))
                                (ht-set it "project_root" (substring-no-properties project-root))
                                (ht-set it "current_file" (substring-no-properties source-buffer-file-name))
                                (ht-set it "context" (format "%s" (ht->plist it)))
